@@ -1,6 +1,7 @@
 import requests
 import time
 import openpyxl
+from multiprocessing import Process
 
 COOKIES_OFFER = {
     'visitor-id': '51df3a40-42f1-4268-ad6a-8f581650054a',
@@ -136,9 +137,21 @@ def get_rating_and_provider_offer(offer_key: str) -> list:
     return response_rating_offer.get('priceLogo')
 
 
+def function_for_multiprocessing(list_res_: list, count_, item_):
+    """Собирает данные и закидывает в список. Также инициирует get-запросы по поставщикам.
+       Вынесена для создания процессов"""
+    list_res_.append(
+        f'Номер позиции - {count_}), логотип поставщика: {get_rating_and_provider_offer(item_.get("offerKey"))}, '
+        f'рейтинг: {item_.get("rating")}, количество товаров: {item_.get("quantity")}, '
+        f'срок доставки: {item_.get("delivery").get("value")}, стоимость товара: '
+        f'{item_.get("displayPrice").get("value")}')
+
+
 # Если в куках оставить геолокацию, то time.sleep достаточно 0,01-0,1с. Этого чаще всего хватает, чтобы запросы прошли
 # без блока. Чтобы своё гео не палить, я это закомментировал (в куках), тогда стабильно работает при 0,2с
 # но нужно учитывать, что реальная пауза немного больше, порядка 0,3с
+#
+# NB! если включить мультипроцессинг, то стабильно работает без sleep. 200 запросов + коннект за 31с
 def get_data(tuple_data: tuple, search_depth: int):
     """Главный метод. Получает на вход кортеж с ключом и глубину поиска.
        Непосредственно парсер.
@@ -148,22 +161,23 @@ def get_data(tuple_data: tuple, search_depth: int):
     response_offer = requests.get('https://emex.ru/api/search/search', params=set_params_offer(make, detail_num),
                                   cookies=COOKIES_OFFER, headers=HEADERS_OFFER).json()
     offers = response_offer.get('searchResult').get('originals')[0].get('offers')
-
     total_offers = len(offers)
 
+    list_process = []
     list_res = [f'Всего предложений: {total_offers}']
     count = 0
     print(f'Всего предложений: {total_offers}')
     for i in range(search_depth if search_depth < total_offers else total_offers):
         print(count)
         item = offers[i]
-        list_res.append(
-            f'Номер позиции - {count}), логотип поставщика: {get_rating_and_provider_offer(item.get("offerKey"))}, '
-            f'рейтинг: {item.get("rating")}, количество товаров: {item.get("quantity")}, '
-            f'срок доставки: {item.get("delivery").get("value")}, стоимость товара: '
-            f'{item.get("displayPrice").get("value")}')
+        process = Process(target=function_for_multiprocessing, args=(list_res, count, item))
+        list_process.append(process)
+        process.start()
         count += 1
-        time.sleep(0.2)
+        # time.sleep(0.2)
+
+    for proc in list_process:
+        proc.join()
 
     with open('result.txt', 'w') as f:
         f.write('_'.join(list_res))
@@ -171,7 +185,7 @@ def get_data(tuple_data: tuple, search_depth: int):
 
 
 def main():
-    get_data(get_data_request_for_pars('dict_data_req.xlsx', 3), 3)
+    get_data(get_data_request_for_pars('dict_data_req.xlsx', 3), 200)
 
 
 if __name__ == '__main__':
